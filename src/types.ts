@@ -14,6 +14,7 @@ export interface NavigationStep {
   instruction: string;
   distance: string;
   duration: string;
+  durationSeconds?: number;
   maneuver?: string;
   location: google.maps.LatLngLiteral;
   distanceMeters: number;
@@ -31,6 +32,8 @@ export interface RouteOption {
   path: google.maps.LatLngLiteral[];
   viewport?: google.maps.LatLngBoundsLiteral;
   warnings?: string[];
+  isShortest?: boolean;
+  isFastest?: boolean;
 }
 
 export type NavState = 'idle' | 'selecting_route' | 'navigating' | 'rerouting' | 'arrived';
@@ -56,3 +59,14 @@ export interface GroundedPlaceInsight {
     url: string;
   }>;
 }
+
+export type AppMode = 'navigation' | 'study';
+
+export interface StudyPlace {
+  name: string;
+  formattedAddress: string;
+  location: google.maps.LatLngLiteral;
+  viewport?: google.maps.LatLngBoundsLiteral;
+  types?: string[];
+}
+

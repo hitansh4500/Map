@@ -141,6 +141,8 @@ export async function computeOptimalRoutes(
             steps: r.steps,
             path,
             viewport: r.bounds,
+            isShortest: r.isShortest,
+            isFastest: r.isFastest,
           };
         });
       }

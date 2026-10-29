@@ -64,6 +64,52 @@ app.post('/api/maps-grounding', async (req, res) => {
   }
 });
 
+// API route for Study Mode Place Geocoding & Redirection
+app.post('/api/geocode-place', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: 'Query is required' });
+      return;
+    }
+    const apiKey =
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      process.env.GOOGLE_MAPS_API_KEY ||
+      'AIzaSyBKRcSrW9nYvkpbXRxhBh3ri45hdI9tr-s';
+
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+      query
+    )}&key=${apiKey}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.status === 'OK' && data.results && data.results.length > 0) {
+      const top = data.results[0];
+      res.json({
+        name: query,
+        formattedAddress: top.formatted_address,
+        location: {
+          lat: top.geometry.location.lat,
+          lng: top.geometry.location.lng,
+        },
+        viewport: top.geometry.viewport
+          ? {
+              north: top.geometry.viewport.northeast.lat,
+              south: top.geometry.viewport.southwest.lat,
+              east: top.geometry.viewport.northeast.lng,
+              west: top.geometry.viewport.southwest.lng,
+            }
+          : undefined,
+        types: top.types,
+      });
+      return;
+    }
+    res.status(404).json({ error: 'Place not found' });
+  } catch (error: unknown) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message || 'Geocoding error' });
+  }
+});
+
 // Serve static assets in production
 app.use(express.static(path.join(__dirname, 'dist')));
 

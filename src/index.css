@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+/* Smooth map canvas rendering & fractional zooming */
+.gm-style canvas,
+.gm-style img {
+  image-rendering: auto;
+  will-change: transform;
+}
+
+/* Smooth zoom transition feedback */
+.gm-style {
+  font-family: inherit !important;
+}

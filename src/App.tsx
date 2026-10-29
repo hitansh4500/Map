@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { APIProvider, useMapsLibrary } from '@vis.gl/react-google-maps';
-import { ShieldCheck, Sparkles } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 
 import { MapContainer } from './components/MapContainer';
 import { NavigationHUD } from './components/NavigationHUD';
@@ -11,12 +11,13 @@ import { TrafficLegend } from './components/TrafficLegend';
 import { PlaceDetailsModal } from './components/PlaceDetailsModal';
 import { QuotaBanner } from './components/QuotaBanner';
 import { SpeedometerWidget } from './components/SpeedometerWidget';
-import { AIChatbotModal } from './components/AIChatbotModal';
+import { StudyCard } from './components/StudyCard';
 
-import { RouteOption, TravelMode, GroundedPlaceInsight } from './types';
+import { RouteOption, TravelMode, GroundedPlaceInsight, AppMode, StudyPlace } from './types';
 import { speechService } from './utils/speech';
 import { computeOptimalRoutes, reverseGeocodeLatLng } from './services/routeCalculator';
 import { fetchPlaceGrounding } from './services/groundingService';
+import { lookupPlaceForStudy } from './services/studyPlaceService';
 
 // Fallback to demo key if .env is not present
 const GOOGLE_MAPS_API_KEY =
@@ -35,7 +36,7 @@ const isCloudProxyCoordinate = (lat: number, lng: number): boolean => {
   return false;
 };
 
-// Calculate distance in meters between two coordinates (Haversine)
+// Calculate distance in meters between two coordinates (Haversine formula)
 function calculateDistanceMeters(p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLiteral): number {
   const R = 6371e3;
   const phi1 = (p1.lat * Math.PI) / 180;
@@ -57,6 +58,9 @@ const MainAppContent: React.FC<{
 }> = ({ isDarkMode, setIsDarkMode, quotaExceeded, setQuotaExceeded }) => {
   const routesLib = useMapsLibrary('routes');
 
+  // Application Mode: 'navigation' or 'study'
+  const [appMode, setAppMode] = useState<AppMode>('navigation');
+
   // Map state
   const [mapTypeId, setMapTypeId] = useState<string>('roadmap');
   const [isTrafficEnabled, setIsTrafficEnabled] = useState<boolean>(true);
@@ -72,16 +76,23 @@ const MainAppContent: React.FC<{
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [proxyBlockedNotice, setProxyBlockedNotice] = useState<boolean>(false);
 
+  // Study Mode state (users enter place name only, redirected directly, no routes shown)
+  const [studyQuery, setStudyQuery] = useState<string>('');
+  const [studyPlace, setStudyPlace] = useState<StudyPlace | null>(null);
+  const [isStudyingLoading, setIsStudyingLoading] = useState<boolean>(false);
+
   // Navigation mode state
   const [isNavigating, setIsNavigating] = useState<boolean>(false);
   const [stepIndex, setStepIndex] = useState<number>(0);
   const [isRerouting, setIsRerouting] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [speedKmh, setSpeedKmh] = useState<number>(0);
 
-  // Real-time Device Tracking state & Demo simulation toggle
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
-  const [currentPathIndex, setCurrentPathIndex] = useState<number>(0);
+  // Real user GPS live speed in km/h
+  const [speedKmh, setSpeedKmh] = useState<number>(0);
+  const [manualSpeedOverride, setManualSpeedOverride] = useState<number | null>(null);
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | undefined>(undefined);
+
+  // Real-time Device Tracking position & heading
   const [userPosition, setUserPosition] = useState<google.maps.LatLngLiteral>(() => {
     try {
       const saved = localStorage.getItem('user_geo_location_mumbai');
@@ -98,13 +109,10 @@ const MainAppContent: React.FC<{
   });
   const [userHeading, setUserHeading] = useState<number>(0);
 
-  // Maps Grounding & AI Concierge modal state
+  // Maps Grounding modal state
   const [groundingInsight, setGroundingInsight] = useState<GroundedPlaceInsight | null>(null);
   const [isGroundingLoading, setIsGroundingLoading] = useState<boolean>(false);
-  const [isAIChatOpen, setIsAIChatOpen] = useState<boolean>(false);
 
-  const simulationTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const watchPositionIdRef = useRef<number | null>(null);
   const lastPosRef = useRef<google.maps.LatLngLiteral | null>(null);
   const lastTimeRef = useRef<number | null>(null);
   const hasMountedRef = useRef<boolean>(false);
@@ -135,6 +143,13 @@ const MainAppContent: React.FC<{
 
           const legitimatePos = { lat, lng };
           setUserPosition(legitimatePos);
+          setGpsAccuracy(position.coords.accuracy);
+
+          // Update speed if provided
+          if (position.coords.speed !== null && !isNaN(position.coords.speed) && position.coords.speed >= 0) {
+            setSpeedKmh(Math.round(position.coords.speed * 3.6));
+          }
+
           try {
             localStorage.setItem('user_geo_location_mumbai', JSON.stringify(legitimatePos));
             const geocoded = await reverseGeocodeLatLng(lat, lng);
@@ -155,7 +170,7 @@ const MainAppContent: React.FC<{
           setDetectedLocationLabel('Kandivali West, Mumbai');
           setIsLocating(false);
         },
-        { enableHighAccuracy: true, timeout: 6000, maximumAge: 60000 }
+        { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
       );
     } else {
       setUserPosition(KANDIVALI_MUMBAI_LOCATION);
@@ -165,7 +180,7 @@ const MainAppContent: React.FC<{
     }
   }, []);
 
-  // Run geolocation ONLY ONCE on mount
+  // Run geolocation on mount
   useEffect(() => {
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
@@ -173,7 +188,80 @@ const MainAppContent: React.FC<{
     }
   }, [handleLocateUser]);
 
-  // 2. Real road route calculation (via server proxy)
+  // 2. Continuous Real-Time User GPS Tracking & Live Speedometer
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        if (isCloudProxyCoordinate(lat, lng)) return;
+
+        const updatedPos = { lat, lng };
+        setUserPosition(updatedPos);
+        setGpsAccuracy(pos.coords.accuracy);
+
+        if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+          setUserHeading(pos.coords.heading);
+        }
+
+        // Live Speedometer calculation directly from device geolocation
+        const rawSpeed = pos.coords.speed;
+        if (rawSpeed !== null && !isNaN(rawSpeed) && rawSpeed >= 0) {
+          const liveKmh = Math.round(rawSpeed * 3.6);
+          setSpeedKmh(liveKmh);
+        } else {
+          // Precise delta calculation based on real displacement over time
+          const now = Date.now();
+          if (lastPosRef.current && lastTimeRef.current) {
+            const distMeters = calculateDistanceMeters(lastPosRef.current, updatedPos);
+            const timeSec = (now - lastTimeRef.current) / 1000;
+            if (timeSec >= 0.8 && timeSec <= 12) {
+              if (distMeters < 1.0) {
+                setSpeedKmh(0);
+              } else {
+                const calculatedSpeedKmh = Math.round((distMeters / timeSec) * 3.6);
+                setSpeedKmh(Math.min(160, Math.max(0, calculatedSpeedKmh)));
+              }
+            }
+          }
+          lastPosRef.current = updatedPos;
+          lastTimeRef.current = now;
+        }
+
+        // If actively navigating, auto-advance steps when user arrives within turn radius
+        if (isNavigating && activeRoute && activeRoute.steps.length > 0) {
+          const currentStepLoc = activeRoute.steps[stepIndex]?.location;
+          if (currentStepLoc) {
+            const distToStep = calculateDistanceMeters(updatedPos, currentStepLoc);
+            if (distToStep < 25 && stepIndex < activeRoute.steps.length - 1) {
+              setStepIndex((cur) => {
+                const next = cur + 1;
+                const nextStepObj = activeRoute.steps[next];
+                if (nextStepObj) {
+                  speechService.speak(`In ${nextStepObj.distance}, ${nextStepObj.instruction}`);
+                }
+                return next;
+              });
+            }
+          }
+        }
+      },
+      (err) => {
+        console.warn('Real-time watchPosition warning:', err.message);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [isNavigating, activeRoute, stepIndex]);
+
+  // 3. Best Path Finding Route Calculation (Google Directions with Shortest Road Network Path)
   const handleCalculateRoutes = useCallback(async () => {
     if (!destination.trim()) {
       setRoutes([]);
@@ -181,6 +269,9 @@ const MainAppContent: React.FC<{
     }
 
     setIsCalculating(true);
+    // In navigation mode, clear study place so route is prioritized
+    setStudyPlace(null);
+
     try {
       const calculatedRoutes = await computeOptimalRoutes(
         routesLib,
@@ -192,7 +283,6 @@ const MainAppContent: React.FC<{
       setRoutes(calculatedRoutes);
       setSelectedRouteIndex(0);
       setStepIndex(0);
-      setCurrentPathIndex(0);
     } catch (err) {
       console.error('Failed to compute route:', err);
     } finally {
@@ -200,82 +290,76 @@ const MainAppContent: React.FC<{
     }
   }, [routesLib, userPosition, destination, travelMode]);
 
-  // Automatically recalculate when travel mode changes
+  // Recalculate routes when travel mode changes in navigation mode
   useEffect(() => {
-    if (destination.trim()) {
+    if (appMode === 'navigation' && destination.trim()) {
       handleCalculateRoutes();
     }
-  }, [travelMode]);
+  }, [travelMode, appMode]);
 
-  // 3. Real Device Movement Tracking with navigator.geolocation.watchPosition & Real-Time Speedometer
-  useEffect(() => {
-    if (!isNavigating || isSimulating) {
-      if (watchPositionIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchPositionIdRef.current);
-        watchPositionIdRef.current = null;
+  // 4. Study Mode Place Lookup & Direct Redirection (NO ROUTE SHOWN)
+  const handleLookupStudyPlace = async (overrideQuery?: string) => {
+    const q = (overrideQuery || studyQuery).trim();
+    if (!q) return;
+
+    setIsStudyingLoading(true);
+    // CRITICAL: Clear all routes so NO route is shown in Study Mode!
+    setRoutes([]);
+    setIsNavigating(false);
+
+    try {
+      const result = await lookupPlaceForStudy(q);
+      if (result) {
+        setStudyPlace(result);
+        speechService.speak(`Redirecting to ${result.name}. Study Mode active.`);
       }
-      return;
+    } catch (err) {
+      console.error('Study place lookup error:', err);
+    } finally {
+      setIsStudyingLoading(false);
     }
+  };
 
-    if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
-      watchPositionIdRef.current = navigator.geolocation.watchPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
-          if (isCloudProxyCoordinate(lat, lng)) return;
+  const handleClearStudyPlace = () => {
+    setStudyPlace(null);
+    setStudyQuery('');
+  };
 
-          const updatedPos = { lat, lng };
-          setUserPosition(updatedPos);
-          if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
-            setUserHeading(pos.coords.heading);
-          }
-
-          // Calculate real-time speed in km/h
-          const rawSpeed = pos.coords.speed;
-          if (rawSpeed !== null && !isNaN(rawSpeed) && rawSpeed >= 0) {
-            setSpeedKmh(Math.round(rawSpeed * 3.6));
-          } else {
-            const now = Date.now();
-            if (lastPosRef.current && lastTimeRef.current) {
-              const distMeters = calculateDistanceMeters(lastPosRef.current, updatedPos);
-              const timeSec = (now - lastTimeRef.current) / 1000;
-              if (timeSec > 0.5 && timeSec < 15) {
-                const calculatedSpeedKmh = Math.round((distMeters / timeSec) * 3.6);
-                setSpeedKmh(Math.min(160, Math.max(0, calculatedSpeedKmh)));
-              }
-            }
-            lastPosRef.current = updatedPos;
-            lastTimeRef.current = now;
-          }
-        },
-        (err) => {
-          console.warn('Real-time watchPosition warning:', err.message);
-        },
-        { enableHighAccuracy: true, maximumAge: 1500, timeout: 10000 }
-      );
-    }
-
-    return () => {
-      if (watchPositionIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchPositionIdRef.current);
-        watchPositionIdRef.current = null;
+  // Switch between App Modes
+  const handleAppModeChange = (mode: AppMode) => {
+    setAppMode(mode);
+    if (mode === 'study') {
+      // In study mode: clear all routes
+      setRoutes([]);
+      setIsNavigating(false);
+      speechService.cancel();
+    } else {
+      // Returning to navigation mode: clear study place
+      setStudyPlace(null);
+      if (destination.trim()) {
+        handleCalculateRoutes();
       }
-    };
-  }, [isNavigating, isSimulating]);
+    }
+  };
 
-  // 4. Start navigation (tracks REAL device GPS movements)
+  // Switch from Study Mode to Navigation to travel to the studied place
+  const handleNavigateFromStudy = (placeName: string) => {
+    setAppMode('navigation');
+    setDestination(placeName);
+    setStudyPlace(null);
+    setTimeout(() => {
+      handleCalculateRoutes();
+    }, 100);
+  };
+
+  // 5. Start navigation (tracks REAL user device movements)
   const handleStartNavigation = () => {
     if (!activeRoute) return;
     setIsNavigating(true);
-    setIsSimulating(false);
+    setStudyPlace(null);
     setStepIndex(0);
-    setCurrentPathIndex(0);
-    setSpeedKmh(0);
     lastPosRef.current = null;
     lastTimeRef.current = null;
-
-    const startPos = activeRoute.path[0] || userPosition;
-    setUserPosition(startPos);
 
     if (activeRoute.steps.length > 0) {
       const firstStep = activeRoute.steps[0];
@@ -288,110 +372,12 @@ const MainAppContent: React.FC<{
   // Exit navigation
   const handleExitNavigation = () => {
     setIsNavigating(false);
-    setIsSimulating(false);
-    setSpeedKmh(0);
     lastPosRef.current = null;
     lastTimeRef.current = null;
-    if (simulationTimerRef.current) {
-      clearInterval(simulationTimerRef.current);
-    }
-    if (watchPositionIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchPositionIdRef.current);
-      watchPositionIdRef.current = null;
-    }
     speechService.cancel();
   };
 
-  // 5. Optional Demo Drive Simulation (Simulates cruising speed)
-  useEffect(() => {
-    if (!isNavigating || !isSimulating || !activeRoute) {
-      if (simulationTimerRef.current) {
-        clearInterval(simulationTimerRef.current);
-      }
-      return;
-    }
-
-    simulationTimerRef.current = setInterval(() => {
-      setCurrentPathIndex((prevIndex) => {
-        const nextIndex = prevIndex + 1;
-        if (nextIndex >= activeRoute.path.length) {
-          setIsSimulating(false);
-          setSpeedKmh(0);
-          speechService.speak('You have arrived at your destination!', 'urgent');
-          return prevIndex;
-        }
-
-        const prevPos = activeRoute.path[prevIndex];
-        const nextPos = activeRoute.path[nextIndex];
-        setUserPosition(nextPos);
-
-        const simulatedSpeed = Math.round(44 + Math.sin(nextIndex * 0.5) * 6);
-        setSpeedKmh(simulatedSpeed);
-
-        const dy = nextPos.lat - prevPos.lat;
-        const dx = (nextPos.lng - prevPos.lng) * Math.cos((prevPos.lat * Math.PI) / 180);
-        const angle = (Math.atan2(dx, dy) * 180) / Math.PI;
-        setUserHeading(angle >= 0 ? angle : angle + 360);
-
-        const approxStepIndex = Math.min(
-          activeRoute.steps.length - 1,
-          Math.floor((nextIndex / activeRoute.path.length) * activeRoute.steps.length)
-        );
-
-        setStepIndex((curStep) => {
-          if (approxStepIndex > curStep) {
-            const newStep = activeRoute.steps[approxStepIndex];
-            speechService.speak(`In ${newStep.distance}, ${newStep.instruction}`);
-            return approxStepIndex;
-          }
-          return curStep;
-        });
-
-        return nextIndex;
-      });
-    }, 700);
-
-    return () => {
-      if (simulationTimerRef.current) {
-        clearInterval(simulationTimerRef.current);
-      }
-    };
-  }, [isNavigating, isSimulating, activeRoute]);
-
-  // 6. Simulate Off-Route Deviation & Recalculate
-  const handleSimulateOffRoute = async () => {
-    if (!activeRoute) return;
-    setIsRerouting(true);
-    speechService.speak('Off-route detected. Recalculating route...', 'urgent');
-
-    const deviatedPos = {
-      lat: userPosition.lat + 0.003,
-      lng: userPosition.lng - 0.004,
-    };
-    setUserPosition(deviatedPos);
-
-    setTimeout(async () => {
-      try {
-        const rerouted = await computeOptimalRoutes(
-          routesLib,
-          deviatedPos,
-          destination,
-          travelMode,
-          deviatedPos
-        );
-        setRoutes(rerouted);
-        setSelectedRouteIndex(0);
-        setStepIndex(0);
-        setCurrentPathIndex(0);
-        setIsRerouting(false);
-        speechService.speak('Rerouted. Continue straight to follow optimal route.');
-      } catch (e) {
-        setIsRerouting(false);
-      }
-    }, 1500);
-  };
-
-  // 7. Maps Grounding place lookup via Gemini 3.8 Flash
+  // 6. Maps Grounding place lookup via Gemini 3.8 Flash
   const handleExplorePlaceGrounding = async (query: string) => {
     setIsGroundingLoading(true);
     setGroundingInsight(null);
@@ -427,11 +413,34 @@ const MainAppContent: React.FC<{
     setStepIndex((prev) => Math.max(0, prev - 1));
   };
 
+  // Dynamic ETA & Remaining route distance calculation
   const currentStep = activeRoute?.steps[stepIndex] || null;
   const nextStep = activeRoute?.steps[stepIndex + 1] || null;
+
+  const remainingSteps = activeRoute ? activeRoute.steps.slice(stepIndex) : [];
+  const remainingDistanceMeters =
+    remainingSteps.length > 0
+      ? remainingSteps.reduce((acc, step) => acc + (step.distanceMeters || 0), 0)
+      : activeRoute?.distanceMeters || 0;
+
+  const totalRouteDistance = activeRoute?.distanceMeters || 1;
+  const remainingFraction = Math.max(0, Math.min(1, remainingDistanceMeters / totalRouteDistance));
+  const remainingDurationSeconds = activeRoute
+    ? Math.max(
+        30,
+        Math.round(
+          activeRoute.durationWithTrafficSeconds *
+            (remainingFraction || 1 / Math.max(1, activeRoute.steps.length))
+        )
+      )
+    : 0;
+
   const trafficDelayMinutes = activeRoute
     ? Math.max(0, Math.round((activeRoute.durationWithTrafficSeconds - activeRoute.durationSeconds) / 60))
     : 0;
+
+  // Effective speed to display
+  const effectiveSpeed = manualSpeedOverride !== null ? manualSpeedOverride : speedKmh;
 
   return (
     <div
@@ -450,7 +459,7 @@ const MainAppContent: React.FC<{
         </div>
       )}
 
-      {/* Main Map Canvas with Modern AdvancedMarker */}
+      {/* Main Map Canvas with Modern AdvancedMarker & Smooth Redirect */}
       <div className="absolute inset-0 z-0">
         <MapContainer
           isDarkMode={isDarkMode}
@@ -464,13 +473,16 @@ const MainAppContent: React.FC<{
           isNavigating={isNavigating}
           onLocateMe={handleLocateUser}
           isLocating={isLocating}
+          studyPlace={studyPlace}
         />
       </div>
 
-      {/* Top Destination Entry Bar (Pinned at top of screen for all devices) */}
+      {/* Top Destination & Study Mode Search Bar (Pinned at top of screen) */}
       {!isNavigating && (
         <div className="fixed top-0 inset-x-0 z-40">
           <TopSearchBar
+            appMode={appMode}
+            onAppModeChange={handleAppModeChange}
             origin={origin}
             destination={destination}
             onOriginChange={setOrigin}
@@ -485,12 +497,15 @@ const MainAppContent: React.FC<{
             isDarkMode={isDarkMode}
             onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
             onExplorePlaceGrounding={handleExplorePlaceGrounding}
-            onOpenAIChat={() => setIsAIChatOpen(true)}
+            studyQuery={studyQuery}
+            onStudyQueryChange={setStudyQuery}
+            onLookupStudyPlace={handleLookupStudyPlace}
+            isStudyingLoading={isStudyingLoading}
           />
         </div>
       )}
 
-      {/* Turn-by-Turn Navigation HUD (Displayed at top during active navigation) */}
+      {/* Turn-by-Turn Navigation HUD (Displays real-time ETA, traffic delay, and remaining distance) */}
       {isNavigating && (
         <div className="fixed top-0 inset-x-0 z-40">
           <NavigationHUD
@@ -503,23 +518,30 @@ const MainAppContent: React.FC<{
             onToggleMute={handleToggleMute}
             onRepeatVoice={handleRepeatVoice}
             isDarkMode={isDarkMode}
-            speedKmh={speedKmh}
+            speedKmh={effectiveSpeed}
+            remainingDistanceMeters={remainingDistanceMeters}
+            remainingDurationSeconds={remainingDurationSeconds}
+            trafficSeverity={activeRoute?.trafficSeverity || 'light'}
+            trafficDelayMinutes={trafficDelayMinutes}
           />
         </div>
       )}
 
-      {/* Floating Speedometer Widget on Map during active navigation */}
+      {/* Live Speedometer Widget showing actual live user GPS speed */}
       {isNavigating && (
-        <div className="fixed left-3 sm:left-4 bottom-24 z-30 pointer-events-auto">
+        <div className="fixed left-3 sm:left-4 bottom-28 z-30 pointer-events-auto">
           <SpeedometerWidget
-            speedKmh={speedKmh}
+            speedKmh={effectiveSpeed}
             isDarkMode={isDarkMode}
-            speedLimit={60}
+            accuracyMeters={gpsAccuracy}
+            isLiveGps={manualSpeedOverride === null}
+            onSetUserSpeed={setManualSpeedOverride}
+            manualSpeedOverride={manualSpeedOverride}
           />
         </div>
       )}
 
-      {/* Floating Traffic Legend Button/Indicator */}
+      {/* Floating Traffic Legend Button/Indicator (Visible when not actively navigating) */}
       {!isNavigating && (
         <div className="fixed left-3 sm:left-4 bottom-3 sm:bottom-4 z-30 pointer-events-auto">
           <TrafficLegend
@@ -531,24 +553,8 @@ const MainAppContent: React.FC<{
         </div>
       )}
 
-      {/* Floating AI Concierge Quick Trigger Button */}
-      {!isNavigating && (
-        <button
-          onClick={() => setIsAIChatOpen(true)}
-          className={`fixed right-3 sm:right-4 bottom-3 sm:bottom-4 z-30 pointer-events-auto px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl sm:rounded-3xl shadow-2xl flex items-center gap-2 border transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-md ${
-            isDarkMode
-              ? 'bg-gradient-to-r from-purple-900/90 via-indigo-900/90 to-blue-900/90 border-purple-500/50 text-white shadow-purple-950/80 hover:border-purple-400'
-              : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 border-purple-400 text-white shadow-purple-500/30 hover:opacity-95'
-          }`}
-          title="Open AI Concierge for Dine-in & Places"
-        >
-          <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 animate-pulse" />
-          <span className="text-xs font-bold tracking-wide">Dine-in & Places AI</span>
-        </button>
-      )}
-
-      {/* Bottom Route Summary Drawer (When NOT navigating and routes exist) */}
-      {!isNavigating && (
+      {/* Bottom Route Summary Drawer (When NOT navigating and routes exist in navigation mode) */}
+      {!isNavigating && appMode === 'navigation' && !studyPlace && (
         <div className="fixed bottom-0 inset-x-0 z-20 pointer-events-none">
           <RouteBottomSheet
             routes={routes}
@@ -561,20 +567,39 @@ const MainAppContent: React.FC<{
         </div>
       )}
 
-      {/* Bottom Navigation HUD (Displayed during active navigation) */}
+      {/* Bottom Study Place Card (When in Study Mode and a place is selected, NO ROUTES SHOWN) */}
+      {!isNavigating && studyPlace && (
+        <div className="fixed bottom-0 inset-x-0 z-30 pointer-events-none">
+          <StudyCard
+            studyPlace={studyPlace}
+            onClearStudyPlace={handleClearStudyPlace}
+            onSwitchMapType={setMapTypeId}
+            currentMapType={mapTypeId}
+            onExplorePlaceGrounding={handleExplorePlaceGrounding}
+            onNavigateHere={handleNavigateFromStudy}
+            onZoomInPlace={() => {
+              // Trigger map camera to zoom in close to examine place
+              setMapTypeId((prev) => (prev === 'roadmap' ? 'satellite' : prev));
+            }}
+            isDarkMode={isDarkMode}
+          />
+        </div>
+      )}
+
+      {/* Bottom Navigation HUD (Displayed during active navigation with clean driver controls) */}
       {isNavigating && activeRoute && (
         <div className="fixed bottom-0 inset-x-0 z-40">
           <NavigationBottomBar
             activeRoute={activeRoute}
-            isSimulating={isSimulating}
-            onToggleSimulate={() => setIsSimulating(!isSimulating)}
-            onSimulateOffRoute={handleSimulateOffRoute}
+            remainingDistanceMeters={remainingDistanceMeters}
+            remainingDurationSeconds={remainingDurationSeconds}
             onNextStep={handleNextStep}
             onPrevStep={handlePrevStep}
             onExitNavigation={handleExitNavigation}
             onRecenter={handleLocateUser}
             isDarkMode={isDarkMode}
             stepIndex={stepIndex}
+            totalSteps={activeRoute.steps.length}
           />
         </div>
       )}
@@ -585,27 +610,13 @@ const MainAppContent: React.FC<{
         isLoading={isGroundingLoading}
         onClose={() => setGroundingInsight(null)}
         onNavigateHere={(placeName) => {
+          setAppMode('navigation');
           setDestination(placeName);
+          setStudyPlace(null);
           setTimeout(() => {
             handleCalculateRoutes();
           }, 100);
         }}
-        isDarkMode={isDarkMode}
-      />
-
-      {/* AI Assistant Chatbot Modal for Dine-in & Places */}
-      <AIChatbotModal
-        isOpen={isAIChatOpen}
-        onClose={() => setIsAIChatOpen(false)}
-        onNavigateHere={(placeName) => {
-          setDestination(placeName);
-          setIsAIChatOpen(false);
-          speechService.speak(`Route set to ${placeName}. Calculating optimal driving directions.`);
-          setTimeout(() => {
-            handleCalculateRoutes();
-          }, 150);
-        }}
-        locationAddress={detectedLocationLabel || 'Kandivali West, Mumbai'}
         isDarkMode={isDarkMode}
       />
     </div>

@@ -111,22 +111,31 @@ export const RouteBottomSheet: React.FC<RouteBottomSheetProps> = ({
               )}
             </div>
 
-            {/* Alternatives pill selector if more than 1 route exists */}
+            {/* Alternatives pill selector with Shortest and Fastest tags */}
             {routes.length > 1 && (
               <div className="flex items-center gap-1.5 pt-1 overflow-x-auto pb-1">
                 {routes.map((r, idx) => (
                   <button
                     key={r.id}
                     onClick={() => onSelectRouteIndex(idx)}
-                    className={`px-2.5 py-1 rounded-xl text-xs font-medium border transition-all cursor-pointer whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-xl text-xs font-medium border transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                       idx === selectedRouteIndex
-                        ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
                         : isDarkMode
                         ? 'bg-neutral-800/80 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
                         : 'bg-neutral-100 text-neutral-700 border-neutral-200 hover:bg-neutral-200'
                     }`}
                   >
-                    Route {idx + 1} ({formatDuration(r.durationWithTrafficSeconds)})
+                    <span className="font-bold">
+                      {r.isShortest && r.isFastest
+                        ? '⭐ Best Path'
+                        : r.isShortest
+                        ? '🟢 Shortest'
+                        : r.isFastest
+                        ? '⚡ Fastest'
+                        : `Alt ${idx + 1}`}
+                    </span>
+                    <span>({formatDistance(r.distanceMeters)} • {formatDuration(r.durationWithTrafficSeconds)})</span>
                   </button>
                 ))}
               </div>
