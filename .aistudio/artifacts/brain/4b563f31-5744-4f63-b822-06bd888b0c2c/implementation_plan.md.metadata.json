@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan to fix the continuous Amsterdam relocation glitch by rejecting European cloud proxy IP coordinates, locking verified Indian location (Kandivali, Mumbai) into persistence, stopping background loops, and adding floating zoom in and zoom out controls with full pinch, wheel, and gesture support.",
+  "updatedAt":  "2026-10-29T15:20:08.855424657Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

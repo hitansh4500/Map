@@ -1,0 +1,6 @@
+{
+  "name": "Google Maps Dark Navigation",
+  "description": "Google Maps application with dark mode, live color-coded traffic, turn-by-turn voice navigation, route calculation, and real-time Maps Grounding.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
