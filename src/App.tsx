@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { APIProvider, useMapsLibrary } from '@vis.gl/react-google-maps';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, Sparkles } from 'lucide-react';
 
 import { MapContainer } from './components/MapContainer';
 import { NavigationHUD } from './components/NavigationHUD';
@@ -11,6 +11,7 @@ import { TrafficLegend } from './components/TrafficLegend';
 import { PlaceDetailsModal } from './components/PlaceDetailsModal';
 import { QuotaBanner } from './components/QuotaBanner';
 import { SpeedometerWidget } from './components/SpeedometerWidget';
+import { AIChatbotModal } from './components/AIChatbotModal';
 
 import { RouteOption, TravelMode, GroundedPlaceInsight } from './types';
 import { speechService } from './utils/speech';
@@ -97,9 +98,10 @@ const MainAppContent: React.FC<{
   });
   const [userHeading, setUserHeading] = useState<number>(0);
 
-  // Maps Grounding modal state
+  // Maps Grounding & AI Concierge modal state
   const [groundingInsight, setGroundingInsight] = useState<GroundedPlaceInsight | null>(null);
   const [isGroundingLoading, setIsGroundingLoading] = useState<boolean>(false);
+  const [isAIChatOpen, setIsAIChatOpen] = useState<boolean>(false);
 
   const simulationTimerRef = useRef<NodeJS.Timeout | null>(null);
   const watchPositionIdRef = useRef<number | null>(null);
@@ -483,6 +485,7 @@ const MainAppContent: React.FC<{
             isDarkMode={isDarkMode}
             onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
             onExplorePlaceGrounding={handleExplorePlaceGrounding}
+            onOpenAIChat={() => setIsAIChatOpen(true)}
           />
         </div>
       )}
@@ -528,9 +531,25 @@ const MainAppContent: React.FC<{
         </div>
       )}
 
+      {/* Floating AI Concierge Quick Trigger Button */}
+      {!isNavigating && (
+        <button
+          onClick={() => setIsAIChatOpen(true)}
+          className={`fixed right-3 sm:right-4 bottom-3 sm:bottom-4 z-30 pointer-events-auto px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl sm:rounded-3xl shadow-2xl flex items-center gap-2 border transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer backdrop-blur-md ${
+            isDarkMode
+              ? 'bg-gradient-to-r from-purple-900/90 via-indigo-900/90 to-blue-900/90 border-purple-500/50 text-white shadow-purple-950/80 hover:border-purple-400'
+              : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 border-purple-400 text-white shadow-purple-500/30 hover:opacity-95'
+          }`}
+          title="Open AI Concierge for Dine-in & Places"
+        >
+          <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-amber-300 animate-pulse" />
+          <span className="text-xs font-bold tracking-wide">Dine-in & Places AI</span>
+        </button>
+      )}
+
       {/* Bottom Route Summary Drawer (When NOT navigating and routes exist) */}
       {!isNavigating && (
-        <div className="fixed bottom-0 inset-x-0 z-30 pointer-events-none">
+        <div className="fixed bottom-0 inset-x-0 z-20 pointer-events-none">
           <RouteBottomSheet
             routes={routes}
             selectedRouteIndex={selectedRouteIndex}
@@ -571,6 +590,22 @@ const MainAppContent: React.FC<{
             handleCalculateRoutes();
           }, 100);
         }}
+        isDarkMode={isDarkMode}
+      />
+
+      {/* AI Assistant Chatbot Modal for Dine-in & Places */}
+      <AIChatbotModal
+        isOpen={isAIChatOpen}
+        onClose={() => setIsAIChatOpen(false)}
+        onNavigateHere={(placeName) => {
+          setDestination(placeName);
+          setIsAIChatOpen(false);
+          speechService.speak(`Route set to ${placeName}. Calculating optimal driving directions.`);
+          setTimeout(() => {
+            handleCalculateRoutes();
+          }, 150);
+        }}
+        locationAddress={detectedLocationLabel || 'Kandivali West, Mumbai'}
         isDarkMode={isDarkMode}
       />
     </div>

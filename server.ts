@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { queryMapsGrounding } from './src/server/geminiMapsHandler.ts';
+import { queryMapsGrounding, queryAssistantChat } from './src/server/geminiMapsHandler.ts';
 import { computeRealRoadRoute } from './src/server/routeProxy.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -12,7 +12,7 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// API route for real road network route computation (no hypotenuse/straight line)
+// API route for real road network route computation
 app.post('/api/compute-route', async (req, res) => {
   try {
     const { origin, destination, travelMode } = req.body;
@@ -29,6 +29,22 @@ app.post('/api/compute-route', async (req, res) => {
   } catch (error: unknown) {
     const err = error as Error;
     res.status(500).json({ error: err.message || 'Error computing route' });
+  }
+});
+
+// API route for AI Maps Assistant Chat (places & dine-in recommendations)
+app.post('/api/assistant-chat', async (req, res) => {
+  try {
+    const { message, history, locationAddress } = req.body;
+    if (!message || typeof message !== 'string') {
+      res.status(400).json({ error: 'Message is required' });
+      return;
+    }
+    const result = await queryAssistantChat(message, history || [], locationAddress || 'Kandivali West, Mumbai');
+    res.json(result);
+  } catch (error: unknown) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message || 'Assistant chat error' });
   }
 });
 

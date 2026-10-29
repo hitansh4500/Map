@@ -37,6 +37,7 @@ interface TopSearchBarProps {
   isDarkMode: boolean;
   onToggleDarkMode: () => void;
   onExplorePlaceGrounding: (place: string) => void;
+  onOpenAIChat?: () => void;
 }
 
 export const TopSearchBar: React.FC<TopSearchBarProps> = ({
@@ -54,6 +55,7 @@ export const TopSearchBar: React.FC<TopSearchBarProps> = ({
   isDarkMode,
   onToggleDarkMode,
   onExplorePlaceGrounding,
+  onOpenAIChat,
 }) => {
   const [showDirectionsDetails, setShowDirectionsDetails] = useState(false);
   const [isVoiceListening, setIsVoiceListening] = useState(false);
@@ -189,6 +191,22 @@ export const TopSearchBar: React.FC<TopSearchBarProps> = ({
             </div>
           </div>
 
+          {/* AI Assistant Chatbot Button */}
+          {onOpenAIChat && (
+            <button
+              onClick={onOpenAIChat}
+              className={`p-2 sm:p-2.5 rounded-xl sm:rounded-2xl border transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5 ${
+                isDarkMode
+                  ? 'bg-gradient-to-tr from-purple-950/80 to-indigo-950/80 border-purple-500/40 text-purple-200 hover:border-purple-400 hover:text-white shadow-sm'
+                  : 'bg-gradient-to-tr from-purple-50 to-indigo-50 border-purple-200 text-purple-700 hover:bg-purple-100 shadow-sm'
+              }`}
+              title="Ask AI Assistant for Dine-in & Places"
+            >
+              <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
+              <span className="hidden md:inline text-xs font-semibold">AI Assistant</span>
+            </button>
+          )}
+
           {/* Quick Expand Toggle for Starting Point & Travel Mode */}
           <button
             onClick={() => setShowDirectionsDetails(!showDirectionsDetails)}
@@ -314,6 +332,27 @@ export const TopSearchBar: React.FC<TopSearchBarProps> = ({
                 );
               })}
             </div>
+
+            {/* AI Concierge Chatbot Quick Action */}
+            {onOpenAIChat && (
+              <button
+                type="button"
+                onClick={onOpenAIChat}
+                className={`w-full py-2 px-3 rounded-xl border flex items-center justify-between text-xs transition-all cursor-pointer shadow-sm ${
+                  isDarkMode
+                    ? 'bg-gradient-to-r from-purple-950/40 to-indigo-950/40 border-purple-500/30 text-purple-200 hover:border-purple-400 hover:text-white'
+                    : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200 text-purple-800 hover:bg-purple-100'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
+                  <span className="font-semibold">Ask AI Concierge for Dine-in & Cafes</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono">
+                  Gemini AI
+                </span>
+              </button>
+            )}
 
             {/* Maps Grounding Button */}
             {destination && (
